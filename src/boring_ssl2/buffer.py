@@ -1,8 +1,7 @@
 import ctypes
 from collections.abc import Buffer, Callable
 from enum import IntEnum
-from functools import partial
-from typing import Final, final, overload
+from typing import overload
 
 from ssl2.errors import EarlyDataRejected, RaggedEOF, WantReadError, WantWriteError
 from ssl2.interface import RECEIVE_SIZE, ClientContext, ServerContext
@@ -10,9 +9,9 @@ from ssl2.parameters import CipherSuite, NextProtocol, ProtocolVersion, TLSVersi
 
 from boring_ssl2.library import LIBRARY, BoringSSLError, CertificateVerificationError
 
-INT_LIMIT: Final = 2**31 - 1
-X509_V_OK: Final = 0
-NEXT_PROTOCOLS: Final = {protocol.value: protocol for protocol in NextProtocol}
+INT_LIMIT = 2**31 - 1
+X509_V_OK = 0
+NEXT_PROTOCOLS = {protocol.value: protocol for protocol in NextProtocol}
 
 
 class SSLErrorCode(IntEnum):
@@ -24,7 +23,6 @@ class SSLErrorCode(IntEnum):
     EARLY_DATA_REJECTED = 15
 
 
-@final
 class TLSBuffer:
     def __init__(
         self,
@@ -104,17 +102,24 @@ class TLSBuffer:
         )
 
     def write(self, buf: Buffer) -> int:
-        payload = bytes(memoryview(buf)[:INT_LIMIT])
+        # bytes pass to BoringSSL as they are; anything else is copied once
+        payload = bytes(buf)
         if not payload:
             # BoringSSL holds post-handshake tickets until the first write; a zero-length write releases them
-            _ = LIBRARY.SSL_write(self._handle, payload, 0)
+            LIBRARY.SSL_write(self._handle, payload, 0)
             return 0
+        size = min(len(payload), INT_LIMIT)
         return self._operate(
-            lambda: LIBRARY.SSL_write(self._handle, payload, len(payload)), "write"
+            lambda: LIBRARY.SSL_write(self._handle, payload, size), "write"
         )
 
+    def attach(self, fileno: int) -> None:
+        # the socket becomes BoringSSL's own BIO: records move between the kernel and the TLS state with no stop in Python
+        if LIBRARY.SSL_set_fd(self._handle, fileno) != 1:
+            raise LIBRARY.error("SSL_set_fd")
+
     def do_handshake(self) -> None:
-        _ = self._operate(lambda: LIBRARY.SSL_do_handshake(self._handle), "handshake")
+        self._operate(lambda: LIBRARY.SSL_do_handshake(self._handle), "handshake")
 
     def cipher(self) -> CipherSuite | int | None:
         cipher = LIBRARY.SSL_get_current_cipher(self._handle)
@@ -182,23 +187,32 @@ class TLSBuffer:
             LIBRARY.CRYPTO_BUFFER_data(leaf), LIBRARY.CRYPTO_BUFFER_len(leaf)
         )
 
+    def getpeerchain(self) -> tuple[bytes, ...]:
+        stack = LIBRARY.SSL_get0_peer_certificates(self._handle)
+        if stack is None:
+            return ()
+        return tuple(
+            ctypes.string_at(
+                LIBRARY.CRYPTO_BUFFER_data(item), LIBRARY.CRYPTO_BUFFER_len(item)
+            )
+            for item in (
+                LIBRARY.OPENSSL_sk_value(stack, index)
+                for index in range(LIBRARY.OPENSSL_sk_num(stack))
+            )
+        )
+
     def _read_into(self, storage: ctypes.Array[ctypes.c_char]) -> int:
         size = len(storage)
         if not size:
             return 0
-        total = self._operate(
-            lambda: LIBRARY.SSL_read(self._handle, storage, size), "read"
-        )
-        # one SSL_read returns a single record; further records already decryptable are taken in the same call
+        handle = self._handle
+        total = self._operate(lambda: LIBRARY.SSL_read(handle, storage, size), "read")
+        # one SSL_read returns a single record; the records already in the memory BIO or in the kernel follow in
+        # the same call. An attached socket is always non-blocking, so BoringSSL answers with WANT_READ, never a block
         while 0 < total < size:
             rest = (ctypes.c_char * (size - total)).from_buffer(storage, total)
-            try:
-                more = self._operate(
-                    partial(LIBRARY.SSL_read, self._handle, rest, len(rest)), "read"
-                )
-            except WantReadError:
-                break
-            if more == 0:
+            more = LIBRARY.SSL_read(handle, rest, size - total)
+            if more <= 0:
                 break
             total += more
         return total
@@ -236,9 +250,10 @@ class TLSBuffer:
                         LIBRARY.X509_verify_cert_error_string(verdict).decode("ascii"),
                     )
                 return BoringSSLError(operation, reasons)
-            case SSLErrorCode.SYSCALL if not reasons:
+            case SSLErrorCode.SYSCALL:
+                # end of stream, a reset or a timeout on the socket: the connection is gone either way
                 return RaggedEOF(
-                    f"{operation}: the peer closed the connection without close_notify"
+                    f"{operation}: the connection ended without close_notify{': ' + '; '.join(reasons) if reasons else ''}"
                 )
             case _:
                 return BoringSSLError(operation, (f"SSL_get_error={code}", *reasons))

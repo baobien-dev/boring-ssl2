@@ -16,11 +16,10 @@ from ctypes import (
     c_void_p,
 )
 from pathlib import Path
-from typing import Final, final
 
 from ssl2.errors import TLSError
 
-FILE_NAMES: Final = {
+FILE_NAMES = {
     "linux": "libboring_ssl2.so",
     "darwin": "libboring_ssl2.dylib",
     "win32": "boring_ssl2.dll",
@@ -58,7 +57,6 @@ class BoringSSLError(TLSError):
         self.reasons: tuple[str, ...] = reasons
 
 
-@final
 class CertificateVerificationError(BoringSSLError):
     def __init__(self, operation: str, reasons: tuple[str, ...], verdict: str) -> None:
         super().__init__(operation, (*reasons, verdict))
@@ -217,6 +215,9 @@ class Library:
         self.SSL_set_bio: Callable[[int, int, int], None] = bind(
             "SSL_set_bio", None, c_void_p, c_void_p, c_void_p
         )
+        self.SSL_set_fd: Callable[[int, int], int] = bind(
+            "SSL_set_fd", c_int, c_void_p, c_int
+        )
         self.SSL_set_tlsext_host_name: Callable[[int, bytes], int] = bind(
             "SSL_set_tlsext_host_name", c_int, c_void_p, c_char_p
         )
@@ -354,6 +355,54 @@ class Library:
             "d2i_X509", c_void_p, c_void_p, c_void_p, c_long
         )
         self.X509_free: Callable[[int], None] = bind("X509_free", None, c_void_p)
+        self.X509_get_pubkey: Callable[[int], int | None] = bind(
+            "X509_get_pubkey", c_void_p, c_void_p
+        )
+        self.X509_get_subject_name: Callable[[int], int] = bind(
+            "X509_get_subject_name", c_void_p, c_void_p
+        )
+        self.X509_get0_serialNumber: Callable[[int], int] = bind(
+            "X509_get0_serialNumber", c_void_p, c_void_p
+        )
+        self.X509_get_ext_by_NID: Callable[[int, int, int], int] = bind(
+            "X509_get_ext_by_NID", c_int, c_void_p, c_int, c_int
+        )
+        self.X509_get_ext: Callable[[int, int], int | None] = bind(
+            "X509_get_ext", c_void_p, c_void_p, c_int
+        )
+        self.X509_EXTENSION_get_data: Callable[[int], int] = bind(
+            "X509_EXTENSION_get_data", c_void_p, c_void_p
+        )
+        self.ASN1_STRING_get0_data: Callable[[int], int] = bind(
+            "ASN1_STRING_get0_data", c_void_p, c_void_p
+        )
+        self.ASN1_STRING_length: Callable[[int], int] = bind(
+            "ASN1_STRING_length", c_int, c_void_p
+        )
+        self.X509_NAME_cmp: Callable[[int, int], int] = bind(
+            "X509_NAME_cmp", c_int, c_void_p, c_void_p
+        )
+        self.d2i_X509_CRL: Callable[[None, object, int], int | None] = bind(
+            "d2i_X509_CRL", c_void_p, c_void_p, c_void_p, c_long
+        )
+        self.X509_CRL_free: Callable[[int], None] = bind(
+            "X509_CRL_free", None, c_void_p
+        )
+        self.X509_CRL_verify: Callable[[int, int], int] = bind(
+            "X509_CRL_verify", c_int, c_void_p, c_void_p
+        )
+        self.X509_CRL_get_issuer: Callable[[int], int] = bind(
+            "X509_CRL_get_issuer", c_void_p, c_void_p
+        )
+        self.X509_CRL_get0_nextUpdate: Callable[[int], int | None] = bind(
+            "X509_CRL_get0_nextUpdate", c_void_p, c_void_p
+        )
+        self.X509_CRL_get0_by_cert: Callable[[int, object, int], int] = bind(
+            "X509_CRL_get0_by_cert", c_int, c_void_p, c_void_p, c_void_p
+        )
+        self.X509_cmp_current_time: Callable[[int], int] = bind(
+            "X509_cmp_current_time", c_int, c_void_p
+        )
         self.X509_check_host: Callable[[int, bytes, int, int, None], int] = bind(
             "X509_check_host", c_int, c_void_p, c_char_p, c_size_t, c_uint, c_void_p
         )
@@ -545,7 +594,7 @@ class Library:
         messages: list[str] = []
         text = ctypes.create_string_buffer(256)
         while code := self.ERR_get_error():
-            _ = self.ERR_error_string_n(code, text, len(text))
+            self.ERR_error_string_n(code, text, len(text))
             messages.append(ctypes.string_at(text).decode("ascii", "replace"))
         return tuple(messages)
 
@@ -553,4 +602,4 @@ class Library:
         return BoringSSLError(operation, self.errors())
 
 
-LIBRARY: Final = Library(Path(__file__).with_name(FILE_NAMES[sys.platform]))
+LIBRARY = Library(Path(__file__).with_name(FILE_NAMES[sys.platform]))

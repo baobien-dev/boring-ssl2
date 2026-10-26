@@ -1,15 +1,18 @@
 [project]
 name = "boring-ssl2"
-version = "1.1.0"
+version = "1.2.0"
 description = "BoringSSL engine for the ssl2 PEP 748 interface: exact ClientHello profiles, certificate compression, resumption, proxies"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "ssl2",
+    "ssl2>=1.2.0",
 ]
 
 [project.urls]
 Repository = "https://github.com/baobien-dev/boring-ssl2"
+
+[tool.basedpyright]
+typeCheckingMode = "strict"
 
 [build-system]
 requires = ["uv_build>=0.13.0,<0.14.0"]

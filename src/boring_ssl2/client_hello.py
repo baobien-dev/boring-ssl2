@@ -1,6 +1,5 @@
 from collections.abc import Iterable, Sequence
 from ctypes import Array, c_uint16
-from typing import Final, final
 
 from ssl2.client_hello import ClientHello, TrustAnchorIdentifier
 from ssl2.errors import ConfigurationError
@@ -15,14 +14,14 @@ from ssl2.parameters import (
 
 from boring_ssl2.library import LIBRARY
 
-SSL_OP_NO_TICKET: Final = 0x4000
-CLIENT_VERSIONS: Final = (
+SSL_OP_NO_TICKET = 0x4000
+CLIENT_VERSIONS = (
     ProtocolVersion.TLS_1_0,
     ProtocolVersion.TLS_1_1,
     ProtocolVersion.TLS_1_2,
     ProtocolVersion.TLS_1_3,
 )
-TLS13_CIPHER_SUITES: Final = frozenset(
+TLS13_CIPHER_SUITES = frozenset(
     {
         CipherSuite.TLS_AES_128_GCM_SHA256,
         CipherSuite.TLS_AES_256_GCM_SHA384,
@@ -31,10 +30,8 @@ TLS13_CIPHER_SUITES: Final = frozenset(
         CipherSuite.TLS_AES_128_CCM_8_SHA256,
     }
 )
-POST_QUANTUM_GROUPS: Final = frozenset(
-    {NamedGroup.X25519MLKEM768, NamedGroup.MLKEM1024}
-)
-TOGGLED_EXTENSIONS: Final = frozenset(
+POST_QUANTUM_GROUPS = frozenset({NamedGroup.X25519MLKEM768, NamedGroup.MLKEM1024})
+TOGGLED_EXTENSIONS = frozenset(
     {
         ExtensionType.status_request,
         ExtensionType.signed_certificate_timestamp,
@@ -47,29 +44,29 @@ TOGGLED_EXTENSIONS: Final = frozenset(
         ExtensionType.trust_anchors,
     }
 )
-FREE_EXTENSIONS: Final = frozenset(
+FREE_EXTENSIONS = frozenset(
     {ExtensionType.server_name, ExtensionType.padding, ExtensionType.pre_shared_key}
 )
-QUIC_EXTENSIONS: Final = frozenset({ExtensionType.quic_transport_parameters})
-TRAILING_EXTENSIONS: Final = (ExtensionType.padding, ExtensionType.pre_shared_key)
-EMPTY_BODY_EXTENSIONS: Final = frozenset(
+QUIC_EXTENSIONS = frozenset({ExtensionType.quic_transport_parameters})
+TRAILING_EXTENSIONS = (ExtensionType.padding, ExtensionType.pre_shared_key)
+EMPTY_BODY_EXTENSIONS = frozenset(
     {
         ExtensionType.extended_main_secret,
         ExtensionType.session_ticket,
         ExtensionType.signed_certificate_timestamp,
     }
 )
-LEGACY_EXTENSIONS: Final = (
+LEGACY_EXTENSIONS = (
     ExtensionType.extended_main_secret,
     ExtensionType.renegotiation_info,
     ExtensionType.ec_point_formats,
 )
-MODERN_EXTENSIONS: Final = (
+MODERN_EXTENSIONS = (
     ExtensionType.key_share,
     ExtensionType.psk_key_exchange_modes,
     ExtensionType.supported_versions,
 )
-UNSENDABLE_REASONS: Final = {
+UNSENDABLE_REASONS = {
     ExtensionType.delegated_credential: "BoringSSL does not offer delegated credentials",
     ExtensionType.record_size_limit: "BoringSSL does not send record_size_limit",
     ExtensionType.early_data: "BoringSSL sends early_data only with a resumed session that allows 0-RTT",
@@ -77,7 +74,6 @@ UNSENDABLE_REASONS: Final = {
 }
 
 
-@final
 class CipherList:
     def __init__(self, suites: Sequence[CipherSuite]) -> None:
         self.modern = tuple(suite for suite in suites if suite in TLS13_CIPHER_SUITES)
@@ -112,7 +108,6 @@ class CipherList:
                 )
 
 
-@final
 class ClientHelloProfile:
     def __init__(self, hello: ClientHello) -> None:
         self._hello = hello
@@ -190,7 +185,7 @@ class ClientHelloProfile:
         if hello.offers(ExtensionType.signed_certificate_timestamp):
             LIBRARY.SSL_CTX_enable_signed_cert_timestamps(handle)
         if not hello.offers(ExtensionType.session_ticket):
-            _ = LIBRARY.SSL_CTX_set_options(handle, SSL_OP_NO_TICKET)
+            LIBRARY.SSL_CTX_set_options(handle, SSL_OP_NO_TICKET)
 
     def prepare(self, ssl: int) -> None:
         hello = self._hello

@@ -4,7 +4,6 @@ from collections.abc import Callable, Iterable
 from ctypes import c_size_t, c_void_p
 from enum import IntEnum, IntFlag
 from pathlib import Path
-from typing import Final, final
 
 from ssl2.credentials import (
     Certificate,
@@ -41,9 +40,9 @@ from boring_ssl2.library import (
     ServerNameFunction,
 )
 
-PEM_PREAMBLE: Final = b"-----BEGIN"
-SESSION_CACHE_CLIENT: Final = 0x01
-NEXT_PROTOCOL_NEGOTIATED: Final = 1
+PEM_PREAMBLE = b"-----BEGIN"
+SESSION_CACHE_CLIENT = 0x01
+NEXT_PROTOCOL_NEGOTIATED = 1
 
 
 class VerifyMode(IntFlag):
@@ -198,7 +197,7 @@ class Context:
             return self._der(data, LIBRARY.d2i_AutoPrivateKey, "d2i_AutoPrivateKey")
         memory = self._memory(data)
         key = LIBRARY.PEM_read_bio_PrivateKey(memory, None, None, None)
-        _ = LIBRARY.BIO_free(memory)
+        LIBRARY.BIO_free(memory)
         if key is None:
             raise LIBRARY.error("PEM_read_bio_PrivateKey")
         return key
@@ -210,7 +209,7 @@ class Context:
             certificate := LIBRARY.PEM_read_bio_X509(memory, None, None, None)
         ) is not None:
             certificates.append(certificate)
-        _ = LIBRARY.BIO_free(memory)
+        LIBRARY.BIO_free(memory)
         # the loop ends on BoringSSL's "no start line" error, which is the end of the data, not a failure
         LIBRARY.ERR_clear_error()
         if not certificates:
@@ -250,7 +249,6 @@ class Context:
         )
 
 
-@final
 class ClientContext(Context):
     def __init__(
         self,
@@ -301,9 +299,7 @@ class ClientContext(Context):
         if session_cache is not None:
             callback = NewSessionFunction(self._record_session)
             self._callbacks.append(callback)
-            _ = LIBRARY.SSL_CTX_set_session_cache_mode(
-                self._handle, SESSION_CACHE_CLIENT
-            )
+            LIBRARY.SSL_CTX_set_session_cache_mode(self._handle, SESSION_CACHE_CLIENT)
             LIBRARY.SSL_CTX_sess_set_new_cb(self._handle, callback)
 
     def __del__(self) -> None:
@@ -333,7 +329,7 @@ class ClientContext(Context):
         )
         ssl = buffer.handle
         try:
-            _ = ipaddress.ip_address(server_hostname)
+            ipaddress.ip_address(server_hostname)
         except ValueError:
             name = server_hostname.encode("idna")
             self._check(
@@ -389,7 +385,6 @@ class ClientContext(Context):
         return 0
 
 
-@final
 class ServerContext(Context):
     def __init__(self, configuration: TLSServerConfiguration) -> None:
         super().__init__()
@@ -480,6 +475,4 @@ class ServerContext(Context):
         return int(ExtensionCallbackResult.OK)
 
 
-IMPLEMENTATION: Final = TLSImplementation(
-    ClientContext, ServerContext, Context.validate
-)
+IMPLEMENTATION = TLSImplementation(ClientContext, ServerContext, Context.validate)

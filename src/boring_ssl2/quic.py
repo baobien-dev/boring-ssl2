@@ -1,7 +1,7 @@
 import ctypes
 from ctypes import CFUNCTYPE, c_int, c_size_t, c_uint8, c_void_p
 from enum import IntEnum
-from typing import Final, Self, final
+from typing import Self
 
 from ssl2.errors import EarlyDataRejected, WantReadError
 
@@ -9,33 +9,51 @@ from boring_ssl2.buffer import TLSBuffer
 from boring_ssl2.contexts import ClientContext
 from boring_ssl2.library import LIBRARY
 
-TLS_1_3: Final = 0x0304
-QUIC_V1: Final = 0x00000001
-QUIC_V2: Final = 0x6B3343CF
-INITIAL_SALTS: Final = {
-    QUIC_V1: bytes.fromhex("38762cf7f55934b34d179ae6a4c80cadccbb7f0a"),
-    QUIC_V2: bytes.fromhex("0dede3def700a6db819381be6e269dcbf9bd2ed9"),
-}
-LABEL_PREFIXES: Final = {QUIC_V1: b"quic ", QUIC_V2: b"quicv2 "}
-RETRY_KEYS: Final = {
-    QUIC_V1: (
-        bytes.fromhex("be0c690b9f66575a1d766b54e368c84e"),
-        bytes.fromhex("461599d35d632bf2239825bb"),
-    ),
-    QUIC_V2: (
-        bytes.fromhex("8fb4b01b56ac48e260fbcbcead7ccc92"),
-        bytes.fromhex("d86969bc2d7c6d9990efb04a"),
-    ),
-}
-TAG_LENGTH: Final = 16
-SAMPLE_LENGTH: Final = 16
-NONCE_LENGTH: Final = 12
-AES_KEY_STRUCTURE: Final = 256
+TLS_1_3 = 0x0304
+TAG_LENGTH = 16
+SAMPLE_LENGTH = 16
+NONCE_LENGTH = 12
+AES_KEY_STRUCTURE = 256
 
 SetSecretFunction = CFUNCTYPE(c_int, c_void_p, c_int, c_void_p, c_void_p, c_size_t)
 AddHandshakeDataFunction = CFUNCTYPE(c_int, c_void_p, c_int, c_void_p, c_size_t)
 FlushFlightFunction = CFUNCTYPE(c_int, c_void_p)
 SendAlertFunction = CFUNCTYPE(c_int, c_void_p, c_int, c_uint8)
+
+
+class QuicVersion(IntEnum):
+    V1 = 0x00000001
+    V2 = 0x6B3343CF
+
+    @property
+    def initial_salt(self) -> bytes:
+        match self:
+            case QuicVersion.V1:
+                return bytes.fromhex("38762cf7f55934b34d179ae6a4c80cadccbb7f0a")
+            case QuicVersion.V2:
+                return bytes.fromhex("0dede3def700a6db819381be6e269dcbf9bd2ed9")
+
+    @property
+    def label_prefix(self) -> bytes:
+        match self:
+            case QuicVersion.V1:
+                return b"quic "
+            case QuicVersion.V2:
+                return b"quicv2 "
+
+    @property
+    def retry_key(self) -> tuple[bytes, bytes]:
+        match self:
+            case QuicVersion.V1:
+                return (
+                    bytes.fromhex("be0c690b9f66575a1d766b54e368c84e"),
+                    bytes.fromhex("461599d35d632bf2239825bb"),
+                )
+            case QuicVersion.V2:
+                return (
+                    bytes.fromhex("8fb4b01b56ac48e260fbcbcead7ccc92"),
+                    bytes.fromhex("d86969bc2d7c6d9990efb04a"),
+                )
 
 
 class EncryptionLevel(IntEnum):
@@ -77,7 +95,6 @@ class Suite(IntEnum):
                 return LIBRARY.EVP_aead_chacha20_poly1305()
 
 
-@final
 class QuicMethod(ctypes.Structure):
     _fields_ = (
         ("set_read_secret", SetSecretFunction),
@@ -88,7 +105,6 @@ class QuicMethod(ctypes.Structure):
     )
 
 
-@final
 class QuicHandshake:
     def __init__(
         self,
@@ -224,16 +240,15 @@ class QuicHandshake:
         return 1
 
 
-OUTPUT_BUFFER: Final = 2048
+OUTPUT_BUFFER = 2048
 
 
-@final
 class PacketProtection:
-    def __init__(self, suite: Suite, secret: bytes, version: int) -> None:
+    def __init__(self, suite: Suite, secret: bytes, version: QuicVersion) -> None:
         self.suite = suite
         self.secret = secret
         self.version = version
-        prefix = LABEL_PREFIXES[version]
+        prefix = version.label_prefix
         key = self.expand_label(suite, secret, prefix + b"key", suite.key_length)
         self._iv = int.from_bytes(
             self.expand_label(suite, secret, prefix + b"iv", NONCE_LENGTH), "big"
@@ -245,6 +260,7 @@ class PacketProtection:
         self._aead = aead
         self._output = ctypes.create_string_buffer(OUTPUT_BUFFER)
         self._written = c_size_t()
+        self._written_ref = ctypes.byref(self._written)
         self._mask_output = ctypes.create_string_buffer(16)
         self._chacha_key = header_key
         self._aes_key = ctypes.create_string_buffer(AES_KEY_STRUCTURE)
@@ -261,11 +277,11 @@ class PacketProtection:
         LIBRARY.EVP_AEAD_CTX_free(self._aead)
 
     @classmethod
-    def initial(cls, version: int, connection_id: bytes) -> tuple[Self, Self]:
+    def initial(cls, version: QuicVersion, connection_id: bytes) -> tuple[Self, Self]:
         suite = Suite.AES_128_GCM_SHA256
         prk = ctypes.create_string_buffer(suite.hash_length)
         prk_length = c_size_t()
-        salt = INITIAL_SALTS[version]
+        salt = version.initial_salt
         if (
             LIBRARY.HKDF_extract(
                 prk,
@@ -285,7 +301,7 @@ class PacketProtection:
         return cls(suite, client, version), cls(suite, server, version)
 
     def update(self) -> Self:
-        prefix = LABEL_PREFIXES[self.version]
+        prefix = self.version.label_prefix
         updated = type(self)(
             self.suite,
             self.expand_label(
@@ -304,15 +320,13 @@ class PacketProtection:
             if len(payload) + TAG_LENGTH <= OUTPUT_BUFFER
             else ctypes.create_string_buffer(len(payload) + TAG_LENGTH)
         )
-        written = self._written
-        nonce = (self._iv ^ packet_number).to_bytes(NONCE_LENGTH, "big")
         if (
             LIBRARY.EVP_AEAD_CTX_seal(
                 self._aead,
                 out,
-                ctypes.byref(written),
+                self._written_ref,
                 len(out),
-                nonce,
+                (self._iv ^ packet_number).to_bytes(NONCE_LENGTH),
                 NONCE_LENGTH,
                 payload,
                 len(payload),
@@ -322,7 +336,7 @@ class PacketProtection:
             != 1
         ):
             raise LIBRARY.error("EVP_AEAD_CTX_seal")
-        return ctypes.string_at(out, written.value)
+        return out.raw[: self._written.value]
 
     def open(self, packet_number: int, header: bytes, ciphertext: bytes) -> bytes:
         out = (
@@ -330,15 +344,13 @@ class PacketProtection:
             if len(ciphertext) <= OUTPUT_BUFFER
             else ctypes.create_string_buffer(len(ciphertext))
         )
-        written = self._written
-        nonce = (self._iv ^ packet_number).to_bytes(NONCE_LENGTH, "big")
         if (
             LIBRARY.EVP_AEAD_CTX_open(
                 self._aead,
                 out,
-                ctypes.byref(written),
+                self._written_ref,
                 len(out),
-                nonce,
+                (self._iv ^ packet_number).to_bytes(NONCE_LENGTH),
                 NONCE_LENGTH,
                 ciphertext,
                 len(ciphertext),
@@ -349,7 +361,7 @@ class PacketProtection:
         ):
             LIBRARY.ERR_clear_error()
             raise ValueError("the packet failed authentication")
-        return ctypes.string_at(out, written.value)
+        return out.raw[: self._written.value]
 
     def mask(self, sample: bytes) -> bytes:
         out = self._mask_output
@@ -364,13 +376,13 @@ class PacketProtection:
             )
         else:
             LIBRARY.AES_encrypt(sample, out, self._aes_key)
-        return ctypes.string_at(out, 5)
+        return out.raw[:5]
 
     @staticmethod
     def retry_tag(
-        version: int, original_destination: bytes, pseudo_packet: bytes
+        version: QuicVersion, original_destination: bytes, pseudo_packet: bytes
     ) -> bytes:
-        key, nonce = RETRY_KEYS[version]
+        key, nonce = version.retry_key
         aead = LIBRARY.EVP_AEAD_CTX_new(
             Suite.AES_128_GCM_SHA256.aead, key, len(key), TAG_LENGTH
         )

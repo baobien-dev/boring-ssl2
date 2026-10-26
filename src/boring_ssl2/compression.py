@@ -2,7 +2,6 @@ import ctypes
 import zlib
 from compression import zstd
 from enum import IntEnum
-from typing import Final, final
 
 from ssl2.errors import ConfigurationError
 from ssl2.parameters import CertificateCompressionAlgorithm
@@ -13,8 +12,8 @@ from boring_ssl2.library import (
     CertificateDecompressFunction,
 )
 
-BROTLI_TRUE: Final = 1
-OUTPUT_CHUNK: Final = 65536
+BROTLI_TRUE = 1
+OUTPUT_CHUNK = 65536
 
 
 class BrotliEncoder(IntEnum):
@@ -30,7 +29,6 @@ class BrotliDecoderResult(IntEnum):
     NEEDS_MORE_OUTPUT = 3
 
 
-@final
 class BrotliDecoder:
     def __init__(self) -> None:
         state = LIBRARY.BrotliDecoderCreateInstance(None, None, None)
