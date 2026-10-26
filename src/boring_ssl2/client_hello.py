@@ -2,7 +2,7 @@ from collections.abc import Iterable, Sequence
 from ctypes import Array, c_uint16
 from typing import Final, final
 
-from ssl2.client_hello import ClientHello
+from ssl2.client_hello import ClientHello, TrustAnchorIdentifier
 from ssl2.errors import ConfigurationError
 from ssl2.parameters import (
     CipherSuite,
@@ -44,6 +44,7 @@ TOGGLED_EXTENSIONS: Final = frozenset(
         ExtensionType.application_settings_old,
         ExtensionType.compress_certificate,
         ExtensionType.encrypted_client_hello,
+        ExtensionType.trust_anchors,
     }
 )
 FREE_EXTENSIONS: Final = frozenset(
@@ -72,7 +73,6 @@ UNSENDABLE_REASONS: Final = {
     ExtensionType.delegated_credential: "BoringSSL does not offer delegated credentials",
     ExtensionType.record_size_limit: "BoringSSL does not send record_size_limit",
     ExtensionType.early_data: "BoringSSL sends early_data only with a resumed session that allows 0-RTT",
-    ExtensionType.trust_anchors: "BoringSSL sends trust_anchors only with requested trust anchor identifiers, which the model does not carry",
     ExtensionType.server_padding: "BoringSSL sends server_padding only with a requested size, which the model does not carry",
 }
 
@@ -213,6 +213,17 @@ class ClientHelloProfile:
             )
         if hello.offers(ExtensionType.encrypted_client_hello):
             LIBRARY.SSL_set_enable_ech_grease(ssl, 1)
+        if hello.trust_anchor_ids:
+            identifiers = b"".join(
+                bytes((len(encoded),)) + encoded
+                for encoded in map(TrustAnchorIdentifier.encode, hello.trust_anchor_ids)
+            )
+            self._apply(
+                LIBRARY.SSL_set1_requested_trust_anchors(
+                    ssl, identifiers, len(identifiers)
+                ),
+                "trust anchor identifiers",
+            )
 
     def check_transport(self, *, quic: bool) -> None:
         listed = self._hello.offers(ExtensionType.quic_transport_parameters)
@@ -300,6 +311,13 @@ class ClientHelloProfile:
         ):
             raise ConfigurationError(
                 "encrypted_client_hello is sent only when TLS 1.3 is offered"
+            )
+        if (
+            hello.offers(ExtensionType.trust_anchors)
+            and self._maximum < ProtocolVersion.TLS_1_3
+        ):
+            raise ConfigurationError(
+                "trust_anchors is sent only when TLS 1.3 is offered"
             )
         unsendable = (
             requested

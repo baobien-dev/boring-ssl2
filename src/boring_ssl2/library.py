@@ -249,6 +249,9 @@ class Library:
         self.SSL_set_alps_use_new_codepoint: Callable[[int, int], None] = bind(
             "SSL_set_alps_use_new_codepoint", None, c_void_p, c_int
         )
+        self.SSL_set1_requested_trust_anchors: Callable[[int, bytes, int], int] = bind(
+            "SSL_set1_requested_trust_anchors", c_int, c_void_p, c_char_p, c_size_t
+        )
         self.SSL_set_enable_ech_grease: Callable[[int, int], None] = bind(
             "SSL_set_enable_ech_grease", None, c_void_p, c_int
         )

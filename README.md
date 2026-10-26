@@ -1,6 +1,6 @@
 # boring-ssl2
 
-BoringSSL, at a pinned commit with one patch for explicit ClientHello extension order, built into one shared library with brotli inside and bound with ctypes. It implements the `ssl2` (PEP 748) interface: `ClientContext`, `ServerContext`, `TLSBuffer`. A `ClientHello` model is sent exactly as described or refused with the reason, over TCP or, with `quic_transport_parameters` listed, over QUIC. Certificate compression with brotli, zstd and zlib, session resumption, SNI based chain selection and client certificates are included, and `QuicHandshake` with `PacketProtection` give a QUIC stack the TLS 1.3 handshake, packet keys, header protection, key updates and 0-RTT of RFC 9001. Requires Python 3.14 and `ssl2`.
+BoringSSL, at a pinned commit with one patch for explicit ClientHello extension order, built into one shared library with brotli inside and bound with ctypes. It implements the `ssl2` (PEP 748) interface: `ClientContext`, `ServerContext`, `TLSBuffer`. A `ClientHello` model is sent exactly as described, trust anchor identifiers included, or refused with the reason, over TCP or, with `quic_transport_parameters` listed, over QUIC. Certificate compression with brotli, zstd and zlib, session resumption, SNI based chain selection and client certificates are included, and `QuicHandshake` with `PacketProtection` give a QUIC stack the TLS 1.3 handshake, packet keys, header protection, key updates and 0-RTT of RFC 9001. Requires Python 3.14 and `ssl2`.
 
 ```text
 uv add boring-ssl2

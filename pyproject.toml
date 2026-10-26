@@ -1,6 +1,6 @@
 [project]
 name = "boring-ssl2"
-version = "1.0.1"
+version = "1.1.0"
 description = "BoringSSL engine for the ssl2 PEP 748 interface: exact ClientHello profiles, certificate compression, resumption, proxies"
 readme = "README.md"
 requires-python = ">=3.14"
