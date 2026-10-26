@@ -163,7 +163,7 @@ for _ in range(2):
     connection.close()
 ```
 
-A `ClientHello` model that lists `pre_shared_key` last needs a `session_cache`; the first hello goes out without it and the resumed hello equals the model.
+A `ClientHello` model that lists `pre_shared_key` last needs a `session_cache`; the first hello goes out without it and the resumed hello equals the model. `key_log="keys.txt"` on `ClientContext` appends every secret of its TCP and QUIC handshakes in the NSS key log format, which Wireshark reads to decrypt a capture.
 
 ## Server
 

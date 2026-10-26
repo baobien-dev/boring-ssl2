@@ -46,6 +46,7 @@ ProtocolSelectFunction = CFUNCTYPE(
 )
 ServerNameFunction = CFUNCTYPE(c_int, c_void_p, c_void_p, c_void_p)
 NewSessionFunction = CFUNCTYPE(c_int, c_void_p, c_void_p)
+KeyLogFunction = CFUNCTYPE(None, c_void_p, c_char_p)
 
 
 class BoringSSLError(TLSError):
@@ -166,6 +167,9 @@ class Library:
         )
         self.SSL_CTX_sess_set_new_cb: Callable[[int, Callable[..., int]], None] = bind(
             "SSL_CTX_sess_set_new_cb", None, c_void_p, c_void_p
+        )
+        self.SSL_CTX_set_keylog_callback: Callable[[int, Callable[..., None]], None] = (
+            bind("SSL_CTX_set_keylog_callback", None, c_void_p, c_void_p)
         )
         self.SSL_SESSION_to_bytes: Callable[[int, object, object], int] = bind(
             "SSL_SESSION_to_bytes", c_int, c_void_p, c_void_p, c_void_p

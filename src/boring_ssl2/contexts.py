@@ -1,5 +1,6 @@
 import ctypes
 import ipaddress
+import os
 from collections.abc import Callable, Iterable
 from ctypes import c_size_t, c_void_p
 from enum import IntEnum, IntFlag
@@ -35,6 +36,7 @@ from boring_ssl2.client_hello import CipherList, ClientHelloProfile
 from boring_ssl2.compression import CertificateCompression
 from boring_ssl2.library import (
     LIBRARY,
+    KeyLogFunction,
     NewSessionFunction,
     ProtocolSelectFunction,
     ServerNameFunction,
@@ -255,10 +257,12 @@ class ClientContext(Context):
         configuration: TLSClientConfiguration,
         *,
         session_cache: SessionCache | None = None,
+        key_log: str | os.PathLike[str] | None = None,
     ) -> None:
         super().__init__()
         self._configuration = configuration
         self._cache = session_cache
+        self._key_log = key_log
         self._handle = self._new()
         hello = configuration.client_hello
         self._profile = None if hello is None else ClientHelloProfile(hello)
@@ -301,6 +305,10 @@ class ClientContext(Context):
             self._callbacks.append(callback)
             LIBRARY.SSL_CTX_set_session_cache_mode(self._handle, SESSION_CACHE_CLIENT)
             LIBRARY.SSL_CTX_sess_set_new_cb(self._handle, callback)
+        if key_log is not None:
+            callback = KeyLogFunction(self._log_key)
+            self._callbacks.append(callback)
+            LIBRARY.SSL_CTX_set_keylog_callback(self._handle, callback)
 
     def __del__(self) -> None:
         LIBRARY.SSL_CTX_free(self._handle)
@@ -362,6 +370,12 @@ class ClientContext(Context):
         accepted = LIBRARY.SSL_set_session(ssl, session)
         LIBRARY.SSL_SESSION_free(session)
         self._check(accepted, "SSL_set_session")
+
+    def _log_key(self, ssl: int, line: bytes) -> None:
+        # one secret per line in the NSS key log format that Wireshark reads, QUIC handshakes included
+        if self._key_log is not None:
+            with open(self._key_log, "a", encoding="ascii") as log:
+                log.write(line.decode("ascii") + "\n")
 
     def _record_session(self, ssl: int, session: int) -> int:
         key = LIBRARY.SSL_get_ex_data(ssl, 0)
