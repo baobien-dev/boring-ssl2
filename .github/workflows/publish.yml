@@ -1,0 +1,38 @@
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # glibc 2.28 is the oldest the wheel will run on; the image carries CPython 3.14 and the GCC toolset
+    container: quay.io/pypa/manylinux_2_28_x86_64
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          export PATH=/opt/python/cp314-cp314/bin:$PATH
+          pip install cmake ninja uv auditwheel
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target boring_ssl2
+          cmake --install build --prefix src
+          uv build --wheel
+          auditwheel repair dist/*.whl -w wheelhouse
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: wheelhouse/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@v1.14.3

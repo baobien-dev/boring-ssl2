@@ -1,0 +1,19 @@
+[project]
+name = "boring-ssl2"
+version = "1.0.0"
+description = "BoringSSL engine for the ssl2 PEP 748 interface: exact ClientHello profiles, certificate compression, resumption, proxies"
+readme = "README.md"
+requires-python = ">=3.14.8"
+dependencies = [
+    "ssl2",
+]
+
+[project.urls]
+Repository = "https://github.com/baobien-dev/boring-ssl2"
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+ssl2 = { path = "../ssl2", editable = true }
