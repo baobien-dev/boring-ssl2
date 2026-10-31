@@ -50,6 +50,9 @@ ignore = [
     "TRY003",  # a message is written in the raise
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"src/boring_ssl2/*_functions.py" = ["N802"]  # the C names, so a reader finds them in BoringSSL's headers
+
 [tool.basedpyright]
 typeCheckingMode = "strict"
 reportImplicitOverride = true
