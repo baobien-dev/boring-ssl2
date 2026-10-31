@@ -36,6 +36,11 @@ class Size(IntEnum):
     ERROR_STRING = 256
 
 
+class PackedError(IntEnum):
+    # ERR_GET_REASON: the low twelve bits of a packed error code
+    REASON = 0xFFF
+
+
 class Callback:
     # the C function pointer types BoringSSL and brotli call back into
     CERTIFICATE_COMPRESS = CFUNCTYPE(c_int, c_void_p, c_void_p, c_void_p, c_size_t)
@@ -96,6 +101,10 @@ class Binder:
             error_string(code, text, len(text))
             messages.append(ctypes.string_at(text).decode("ascii", "replace"))
         return tuple(messages)
+
+    def peek_reason(self) -> int:
+        # the reason of the first queued error, left in the queue; 0 when the queue is empty
+        return self.bind("ERR_peek_error", c_uint32)() & PackedError.REASON
 
     def error(self, operation: str) -> BoringSSLError:
         return BoringSSLError(operation, self.errors())

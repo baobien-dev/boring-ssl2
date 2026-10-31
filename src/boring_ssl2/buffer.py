@@ -22,6 +22,11 @@ class SSLErrorCode(IntEnum):
     EARLY_DATA_REJECTED = 15
 
 
+class ErrorReason(IntEnum):
+    # ERR_GET_REASON of the SSL library's errors
+    ALERT_CLOSE_NOTIFY = 1000  # SSL_AD_REASON_OFFSET + close_notify: the peer sent its close_notify at fatal level
+
+
 class VerifyResult(IntEnum):
     OK = 0
 
@@ -222,6 +227,7 @@ class TLSBuffer:
     def _failure(self, result: int, operation: str) -> Exception | None:
         library = self._library
         code = library.SSL_get_error(self._handle, result)
+        reason = library.peek_reason()
         reasons = library.errors()
         match code:
             case SSLErrorCode.WANT_READ:
@@ -229,6 +235,10 @@ class TLSBuffer:
             case SSLErrorCode.WANT_WRITE:
                 return WantWriteError(f"{operation} needs the outgoing buffer drained")
             case SSLErrorCode.ZERO_RETURN:
+                return None
+            case SSLErrorCode.SSL if reason == ErrorReason.ALERT_CLOSE_NOTIFY:
+                # RFC 8446 section 6: the level of an alert is ignored. Some servers, Meta's among them, send
+                # close_notify as fatal, which BoringSSL files as an error; it is the peer closing all the same
                 return None
             case SSLErrorCode.EARLY_DATA_REJECTED:
                 return EarlyDataRejectedError(f"{operation}: the server declined the early data")
