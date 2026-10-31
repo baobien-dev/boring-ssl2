@@ -29,7 +29,8 @@ jobs:
           cmake --build build --target boring_ssl2
           cmake --install build --prefix src
           uv build --wheel
-          auditwheel repair dist/*.whl -w wheelhouse
+          # --strip drops the debug information BoringSSL compiles in, 35 MB of a 40 MB library
+          auditwheel repair --strip dist/*.whl -w wheelhouse
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: dist-${{ matrix.name }}
