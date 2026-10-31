@@ -20,6 +20,11 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(BROTLI_BUILD_TOOLS OFF)
 set(BROTLI_DISABLE_TESTS ON)
 set(BROTLI_BUNDLED_MODE ON)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  # on iOS CMake makes every executable an app bundle, and BoringSSL's install rule for its bssl tool refuses a
+  # bundle without a destination; the tool is never built here, so it stays a plain executable
+  set(CMAKE_MACOSX_BUNDLE OFF)
+endif()
 # BoringSSL marks its functions for export when it is told it builds a shared library
 add_compile_definitions(BORINGSSL_SHARED_LIBRARY)
 if(WIN32)
