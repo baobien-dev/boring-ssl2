@@ -2,6 +2,12 @@
 
 All notable changes to boring-ssl2. The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.0.3] - 2026-10-31
+
+### Fixed
+
+- A close_notify the peer sends at fatal level, as Meta's servers do, ends the stream instead of raising `BoringSSLError`. BoringSSL files such an alert as an error; RFC 8446 says the level of an alert is ignored. `read()` returns `b""` and `shutdown()` completes quietly, so `TLSSocket`, `TLSStream` and boring-http's `Client.close()` no longer fail on those connections.
+
 ## [2.0.2] - 2026-10-31
 
 ### Changed
