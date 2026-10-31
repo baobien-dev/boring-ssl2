@@ -2,7 +2,7 @@
 
 All notable changes to boring-ssl2. The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [2.0.0] - 2026-10-31
 
 The engine was written again from the ground up. What a program sees:
 

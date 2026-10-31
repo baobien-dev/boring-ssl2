@@ -16,7 +16,7 @@ wheels = [
 
 [[package]]
 name = "boring-ssl2"
-version = "0.1.0"
+version = "2.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "ssl2" },
@@ -80,7 +80,7 @@ wheels = [
 
 [[package]]
 name = "ssl2"
-version = "0.1.0"
+version = "3.0.0"
 source = { editable = "../ssl2" }
 
 [package.metadata]
