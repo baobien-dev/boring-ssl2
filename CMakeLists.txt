@@ -63,3 +63,6 @@ install(TARGETS boring_ssl2
   RUNTIME DESTINATION boring_ssl2
   ARCHIVE DESTINATION import
 )
+# the licenses of what the library carries go into the package next to it
+install(FILES "${boringssl_SOURCE_DIR}/LICENSE" DESTINATION boring_ssl2/licenses RENAME BORINGSSL)
+install(FILES "${brotli_SOURCE_DIR}/LICENSE" DESTINATION boring_ssl2/licenses RENAME BROTLI)
