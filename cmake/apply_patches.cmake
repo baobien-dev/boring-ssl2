@@ -1,0 +1,16 @@
+# Applies every *.patch in PATCHES to the current directory, in file name order; FetchContent runs this inside
+# the downloaded source tree. A patch that is already applied, as after a re-run of cmake, is skipped.
+file(GLOB patches "${PATCHES}/*.patch")
+list(SORT patches)
+foreach(patch IN LISTS patches)
+  execute_process(COMMAND ${GIT_EXECUTABLE} apply --check --reverse ${patch} RESULT_VARIABLE already_applied OUTPUT_QUIET ERROR_QUIET)
+  if(already_applied EQUAL 0)
+    message(STATUS "already applied ${patch}")
+    continue()
+  endif()
+  execute_process(COMMAND ${GIT_EXECUTABLE} apply ${patch} RESULT_VARIABLE failed)
+  if(failed)
+    message(FATAL_ERROR "cannot apply ${patch}")
+  endif()
+  message(STATUS "applied ${patch}")
+endforeach()

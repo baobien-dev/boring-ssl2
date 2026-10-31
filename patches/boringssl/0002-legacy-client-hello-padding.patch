@@ -1,0 +1,200 @@
+From 0861c450a530114de479862e77348b21616c33e0 Mon Sep 17 00:00:00 2001
+From: Huynh Bao Bien <276976028+baobien-dev@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 18:12:41 +0700
+Subject: [PATCH] Add SSL_CTX_set_legacy_padding and SSL_set_legacy_padding
+
+Until August 2026 a TLS ClientHello of 256 to 511 bytes was padded to 512
+bytes with the padding extension of RFC 7685, to get past F5 terminators
+that read it as an SSL 2.0 hello. Clients built on those versions, such
+as older Android, still send that padding. The switch brings the padding
+back for a context or a connection so their ClientHello can be sent as
+it is; it is off by default and changes nothing else.
+---
+ include/openssl/ssl.h | 10 ++++++++
+ ssl/extensions.cc     | 57 ++++++++++++++++++++++++++++++++++++++++---
+ ssl/internal.h        |  8 ++++++
+ ssl/ssl_lib.cc        | 15 ++++++++++++
+ 4 files changed, 86 insertions(+), 4 deletions(-)
+
+diff --git a/include/openssl/ssl.h b/include/openssl/ssl.h
+index 19d1546..e06b7fb 100644
+--- a/include/openssl/ssl.h
++++ b/include/openssl/ssl.h
+@@ -5702,6 +5702,16 @@ OPENSSL_EXPORT int SSL_CTX_set1_extension_order(SSL_CTX *ctx,
+ OPENSSL_EXPORT int SSL_set1_extension_order(SSL *ssl, const uint16_t *types,
+                                             size_t num_types);
+ 
++// SSL_CTX_set_legacy_padding configures whether sockets on `ctx` pad a TLS
++// ClientHello of 256 to 511 bytes up to 512 bytes with the padding extension
++// of RFC 7685, as clients did until 2026 to get past old F5 terminators. It is
++// off by default and only there to send the same ClientHello as such a client.
++OPENSSL_EXPORT void SSL_CTX_set_legacy_padding(SSL_CTX *ctx, int enabled);
++
++// SSL_set_legacy_padding behaves like `SSL_CTX_set_legacy_padding` but
++// configures an individual `SSL`.
++OPENSSL_EXPORT void SSL_set_legacy_padding(SSL *ssl, int enabled);
++
+ // SSL_max_seal_overhead returns the maximum overhead, in bytes, of sealing a
+ // record with `ssl`.
+ OPENSSL_EXPORT size_t SSL_max_seal_overhead(const SSL *ssl);
+diff --git a/ssl/extensions.cc b/ssl/extensions.cc
+index fbb8f01..1592e50 100644
+--- a/ssl/extensions.cc
++++ b/ssl/extensions.cc
+@@ -1979,6 +1979,26 @@ static bool should_offer_psk(const SSL_HANDSHAKE *hs,
+          type != ssl_client_hello_outer;
+ }
+ 
++// ext_pre_shared_key_clienthello_length returns the size the pre_shared_key
++// extension will take in the ClientHello, header included, or zero when none is
++// offered. The legacy padding counts it before the extension is written.
++static size_t ext_pre_shared_key_clienthello_length(
++    const SSL_HANDSHAKE *hs, ssl_client_hello_type_t type) {
++  if (!should_offer_psk(hs, type)) {
++    return 0;
++  }
++  // The extension type and length, then the lengths of the identity and binder
++  // lists.
++  size_t length = 2 + 2 + 2 + 2;
++  for (const auto &psk : hs->pre_shared_keys) {
++    // A length-prefixed identity, the obfuscated ticket age, and a
++    // length-prefixed binder as long as the PSK's hash.
++    length += 2 + ssl_pre_shared_key_identity(psk).size() + 4 + 1 +
++              EVP_MD_size(ssl_pre_shared_key_hash(psk));
++  }
++  return length;
++}
++
+ // ext_pre_shared_key_add_clienthello writes a pre_shared_key extension to
+ // `out_extensions` and flushes `out_client_hello`, invalidating
+ // `out_extensions`. `out_extensions` must be a child of `out_client_hello`.
+@@ -4542,6 +4562,8 @@ bool ssl_add_clienthello_tlsext(SSL_HANDSHAKE *hs, CBB *out, CBB *out_encoded,
+   }
+ 
+   assert(out_encoded == nullptr);  // Only ClientHelloInner needs two outputs.
++  // The size of the message so far, header included, for the legacy padding.
++  const size_t body_len = SSL3_HM_HEADER_LENGTH + CBB_len(out);
+   SSLImpl *const ssl = hs->ssl;
+   CBB extensions;
+   if (!CBB_add_u16_length_prefixed(out, &extensions)) {
+@@ -4595,13 +4617,40 @@ bool ssl_add_clienthello_tlsext(SSL_HANDSHAKE *hs, CBB *out, CBB *out_encoded,
+   // intolerant to the last extension being zero-length. See
+   // https://crbug.com/363583.
+   bool offering_psk = should_offer_psk(hs, type);
+-  if (!offering_psk && last_was_empty && !SSL_is_dtls(ssl) &&
+-      !SSL_is_quic(ssl) && !ssl->s3->used_hello_retry_request) {
+-    if (!add_padding_extension(&extensions, TLSEXT_TYPE_padding, 1)) {
+-      return false;
++  const bool padding_allowed = !SSL_is_dtls(ssl) && !SSL_is_quic(ssl) &&
++                               !ssl->s3->used_hello_retry_request;
++  size_t padding_len = 0;
++  if (!offering_psk && last_was_empty && padding_allowed) {
++    padding_len = 1;
++  }
++
++  if (hs->config->legacy_padding && padding_allowed) {
++    // RFC 7685: a ClientHello of 256 to 511 bytes is padded to 512, the size
++    // the F5 terminators of 2013 did not mistake for an SSL 2.0 hello. The
++    // total counts the message so far, the extensions block with its length
++    // prefix, the padding added above, and the pre_shared_key extension that
++    // follows the padding.
++    size_t total = body_len + 2 + CBB_len(&extensions) +
++                   ext_pre_shared_key_clienthello_length(hs, type);
++    if (padding_len != 0) {
++      total += 4 + padding_len;
++    }
++    if (total > 0xff && total < 0x200) {
++      if (padding_len != 0) {
++        total -= 4 + padding_len;
++      }
++      // The extension header takes four bytes of the padding; when they do
++      // not fit, one byte of padding keeps the last extension non-empty.
++      padding_len = 0x200 - total;
++      padding_len = padding_len >= 4 + 1 ? padding_len - 4 : 1;
+     }
+   }
+ 
++  if (padding_len != 0 &&
++      !add_padding_extension(&extensions, TLSEXT_TYPE_padding, padding_len)) {
++    return false;
++  }
++
+   // The PSK extension must be last, including after the padding.
+   size_t psk_len;
+   if (!ext_pre_shared_key_add_clienthello(hs, out, &extensions, &psk_len,
+diff --git a/ssl/internal.h b/ssl/internal.h
+index 9858ede..73589dc 100644
+--- a/ssl/internal.h
++++ b/ssl/internal.h
+@@ -3581,6 +3581,10 @@ struct SSL_CONFIG {
+   // permute_extensions is whether to permute extensions when sending messages.
+   bool permute_extensions : 1;
+ 
++  // legacy_padding is whether a ClientHello of 256 to 511 bytes is padded to
++  // 512 bytes with the padding extension, as before August 2026.
++  bool legacy_padding : 1;
++
+   // alps_use_new_codepoint if set indicates we use new ALPS extension codepoint
+   // to negotiate and convey application settings.
+   bool alps_use_new_codepoint : 1;
+@@ -4201,6 +4205,10 @@ class SSLContext : public ssl_ctx_st, public RefCounted<SSLContext> {
+   // permute_extensions is whether to permute extensions when sending messages.
+   bool permute_extensions : 1;
+ 
++  // legacy_padding is inherited by the SSL structure, see
++  // SSL_CONFIG::legacy_padding.
++  bool legacy_padding : 1;
++
+   // allow_unknown_alpn_protos is whether the client allows unsolicited ALPN
+   // protocols from the peer.
+   bool allow_unknown_alpn_protos : 1;
+diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
+index 56b6197..97b7aa8 100644
+--- a/ssl/ssl_lib.cc
++++ b/ssl/ssl_lib.cc
+@@ -370,6 +370,7 @@ bssl::SSLContext::SSLContext(const SSL_METHOD *ssl_method)
+       channel_id_enabled(false),
+       grease_enabled(false),
+       permute_extensions(false),
++      legacy_padding(false),
+       allow_unknown_alpn_protos(false),
+       false_start_allowed_without_alpn(false),
+       enable_early_data(false),
+@@ -508,6 +509,7 @@ SSL *SSL_new(SSL_CTX *ctx) {
+   ssl->config->retain_only_sha256_of_client_certs =
+       ctx_impl->retain_only_sha256_of_client_certs;
+   ssl->config->permute_extensions = ctx_impl->permute_extensions;
++  ssl->config->legacy_padding = ctx_impl->legacy_padding;
+   ssl->config->compliance_policy = ctx_impl->compliance_policy;
+ 
+   if (!ssl->config->tls13_cipher_list.CopyFrom(ctx_impl->tls13_cipher_list)) {
+@@ -575,6 +577,7 @@ SSL_CONFIG::SSL_CONFIG(SSLImpl *ssl_arg)
+       jdk11_workaround(false),
+       quic_use_legacy_codepoint(false),
+       permute_extensions(false),
++      legacy_padding(false),
+       alps_use_new_codepoint(true),
+       server_padding_enabled(false) {
+   assert(ssl);
+@@ -3322,6 +3325,18 @@ void SSL_set_permute_extensions(SSL *ssl, int enabled) {
+   ssl_impl->config->permute_extensions = !!enabled;
+ }
+ 
++void SSL_CTX_set_legacy_padding(SSL_CTX *ctx, int enabled) {
++  FromOpaque(ctx)->legacy_padding = !!enabled;
++}
++
++void SSL_set_legacy_padding(SSL *ssl, int enabled) {
++  auto *ssl_impl = FromOpaque(ssl);
++  if (!ssl_impl->config) {
++    return;
++  }
++  ssl_impl->config->legacy_padding = !!enabled;
++}
++
+ int32_t SSL_get_ticket_age_skew(const SSL *ssl) {
+   return FromOpaque(ssl)->s3->ticket_age_skew;
+ }
+-- 
+2.56.0
+

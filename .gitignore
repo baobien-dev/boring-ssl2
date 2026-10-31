@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# The shared library CMake installs next to the package, and the Windows import library
+*.so
+*.dylib
+*.dll
+import/
