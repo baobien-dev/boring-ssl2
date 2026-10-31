@@ -1,0 +1,286 @@
+from collections.abc import Iterable, Sequence
+from ctypes import Array, c_uint16
+from enum import IntFlag
+from typing import ClassVar
+
+from ssl2.client_hello import ClientHello, TrustAnchorIdentifier
+from ssl2.errors import ConfigurationError
+from ssl2.registry import CipherSuite, ECPointFormat, ExtensionType, NamedGroup, ProtocolVersion, PskKeyExchangeMode
+
+from boring_ssl2.library import Library
+
+
+class ContextOption(IntFlag):
+    # SSL_CTX_set_options
+    NO_TICKET = 0x4000
+
+
+class CipherList:
+    # BoringSSL takes the TLS 1.3 suites as ids and the older ones as a colon separated list of names
+    TLS13_SUITES = frozenset(
+        {
+            CipherSuite.TLS_AES_128_GCM_SHA256,
+            CipherSuite.TLS_AES_256_GCM_SHA384,
+            CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
+            CipherSuite.TLS_AES_128_CCM_SHA256,
+            CipherSuite.TLS_AES_128_CCM_8_SHA256,
+        }
+    )
+
+    def __init__(self, suites: Sequence[CipherSuite]) -> None:
+        self.modern = tuple(suite for suite in suites if suite in self.TLS13_SUITES)
+        self.legacy = tuple(suite for suite in suites if suite not in self.TLS13_SUITES)
+
+    def configure(self, library: Library, handle: int) -> None:
+        if self.modern:
+            identifiers = ClientHelloProfile.array(self.modern)
+            if library.SSL_CTX_set1_tls13_ciphers(handle, identifiers, None, len(identifiers)) != 1:
+                raise ConfigurationError(f"BoringSSL rejected the TLS 1.3 cipher suites: {'; '.join(library.errors())}")
+        if self.legacy:
+            names: list[bytes] = []
+            for suite in self.legacy:
+                cipher = library.SSL_get_cipher_by_value(suite)
+                if cipher is None:
+                    raise ConfigurationError(f"BoringSSL does not implement {suite.name}")
+                names.append(library.SSL_CIPHER_standard_name(cipher))
+            if library.SSL_CTX_set_strict_cipher_list(handle, b":".join(names)) != 1:
+                raise ConfigurationError(f"BoringSSL rejected the cipher list: {'; '.join(library.errors())}")
+
+
+class ClientHelloProfile:
+    # checks a ClientHello model against what BoringSSL can send, then configures a context and its connections
+    CLIENT_VERSIONS = (
+        ProtocolVersion.TLS_1_0,
+        ProtocolVersion.TLS_1_1,
+        ProtocolVersion.TLS_1_2,
+        ProtocolVersion.TLS_1_3,
+    )
+    POST_QUANTUM_GROUPS = frozenset({NamedGroup.X25519MLKEM768, NamedGroup.MLKEM1024})
+    # extensions BoringSSL sends when asked and leaves out otherwise
+    TOGGLED_EXTENSIONS = frozenset(
+        {
+            ExtensionType.status_request,
+            ExtensionType.signed_certificate_timestamp,
+            ExtensionType.session_ticket,
+            ExtensionType.application_layer_protocol_negotiation,
+            ExtensionType.application_settings,
+            ExtensionType.application_settings_old,
+            ExtensionType.compress_certificate,
+            ExtensionType.encrypted_client_hello,
+            ExtensionType.trust_anchors,
+        }
+    )
+    # extensions BoringSSL places itself, whatever the order given
+    FREE_EXTENSIONS = frozenset({ExtensionType.server_name, ExtensionType.padding, ExtensionType.pre_shared_key})
+    QUIC_EXTENSIONS = frozenset({ExtensionType.quic_transport_parameters})
+    # padding and pre_shared_key are not in BoringSSL's extension table; it always places them last, in this order
+    TRAILING_EXTENSIONS = (ExtensionType.padding, ExtensionType.pre_shared_key)
+    EMPTY_BODY_EXTENSIONS = frozenset(
+        {
+            ExtensionType.extended_main_secret,
+            ExtensionType.session_ticket,
+            ExtensionType.signed_certificate_timestamp,
+        }
+    )
+    LEGACY_EXTENSIONS = (
+        ExtensionType.extended_main_secret,
+        ExtensionType.renegotiation_info,
+        ExtensionType.ec_point_formats,
+    )
+    MODERN_EXTENSIONS = (
+        ExtensionType.key_share,
+        ExtensionType.psk_key_exchange_modes,
+        ExtensionType.supported_versions,
+    )
+    UNSENDABLE_REASONS: ClassVar[dict[ExtensionType, str]] = {
+        ExtensionType.delegated_credential: "BoringSSL does not offer delegated credentials",
+        ExtensionType.record_size_limit: "BoringSSL does not send record_size_limit",
+        ExtensionType.early_data: "BoringSSL sends early_data only with a resumed session that allows 0-RTT",
+        ExtensionType.server_padding: "BoringSSL sends server_padding only with a requested size, which the model does not carry",
+    }
+
+    def __init__(self, hello: ClientHello) -> None:
+        self._hello = hello
+        self._minimum = hello.lowest_version
+        self._maximum = hello.highest_version
+        self._check_versions()
+        self._check_ciphers()
+        self._check_extensions()
+        self._check_trailing()
+        self._check_payloads()
+        self._order = tuple(extension for extension in hello.extensions if extension not in self.TRAILING_EXTENSIONS)
+
+    def configure(self, library: Library, handle: int) -> None:
+        hello = self._hello
+        self._apply(library, library.SSL_CTX_set_min_proto_version(handle, self._minimum), "minimum version")
+        self._apply(library, library.SSL_CTX_set_max_proto_version(handle, self._maximum), "maximum version")
+        library.SSL_CTX_set_grease_enabled(handle, int(hello.grease))
+        library.SSL_CTX_set_permute_extensions(handle, int(hello.permute_extensions))
+        if hello.legacy_padding:
+            library.SSL_CTX_set_legacy_padding(handle, 1)
+        if not hello.permute_extensions:
+            order = self.array(self._order)
+            self._apply(library, library.SSL_CTX_set1_extension_order(handle, order, len(order)), "extension order")
+        CipherList(hello.cipher_suites).configure(library, handle)
+        for group in hello.supported_groups:
+            if library.SSL_CTX_set1_group_ids(handle, self.array((group,)), 1) != 1:
+                library.ERR_clear_error()
+                raise ConfigurationError(f"BoringSSL does not support the group {group.name}")
+        groups = self.array(hello.supported_groups)
+        self._apply(library, library.SSL_CTX_set1_group_ids(handle, groups, len(groups)), "supported groups")
+        for scheme in hello.signature_algorithms:
+            if library.SSL_CTX_set_verify_algorithm_prefs(handle, self.array((scheme,)), 1) != 1:
+                library.ERR_clear_error()
+                raise ConfigurationError(f"BoringSSL does not support the signature scheme {scheme.name}")
+        if hello.signature_algorithms:
+            schemes = self.array(hello.signature_algorithms)
+            self._apply(
+                library,
+                library.SSL_CTX_set_verify_algorithm_prefs(handle, schemes, len(schemes)),
+                "signature algorithms",
+            )
+        if hello.application_protocols:
+            wire = self.alpn_wire(hello.application_protocols)
+            # SSL_CTX_set_alpn_protos answers zero on success, unlike the rest
+            self._apply(
+                library, int(library.SSL_CTX_set_alpn_protos(handle, wire, len(wire)) == 0), "application protocols"
+            )
+        if hello.offers(ExtensionType.status_request):
+            library.SSL_CTX_enable_ocsp_stapling(handle)
+        if hello.offers(ExtensionType.signed_certificate_timestamp):
+            library.SSL_CTX_enable_signed_cert_timestamps(handle)
+        if not hello.offers(ExtensionType.session_ticket):
+            library.SSL_CTX_set_options(handle, ContextOption.NO_TICKET)
+
+    def prepare(self, library: Library, ssl: int) -> None:
+        # what BoringSSL takes per connection rather than per context
+        hello = self._hello
+        if hello.key_share_groups:
+            shares = self.array(hello.key_share_groups)
+            self._apply(library, library.SSL_set1_client_key_shares(ssl, shares, len(shares)), "key shares")
+        for protocol in hello.application_settings:
+            self._apply(
+                library,
+                library.SSL_add_application_settings(ssl, protocol, len(protocol), None, 0),
+                "application settings",
+            )
+        if hello.application_settings:
+            library.SSL_set_alps_use_new_codepoint(ssl, int(hello.offers(ExtensionType.application_settings)))
+        if hello.offers(ExtensionType.encrypted_client_hello):
+            library.SSL_set_enable_ech_grease(ssl, 1)
+        if hello.trust_anchor_ids:
+            identifiers = b"".join(
+                bytes((len(encoded),)) + encoded
+                for encoded in map(TrustAnchorIdentifier.encode, hello.trust_anchor_ids)
+            )
+            self._apply(
+                library,
+                library.SSL_set1_requested_trust_anchors(ssl, identifiers, len(identifiers)),
+                "trust anchor identifiers",
+            )
+
+    def check_transport(self, *, quic: bool) -> None:
+        listed = self._hello.offers(ExtensionType.quic_transport_parameters)
+        if quic and not listed:
+            raise ConfigurationError("BoringSSL always sends quic_transport_parameters over QUIC; list it in the model")
+        if listed and not quic:
+            raise ConfigurationError("BoringSSL sends quic_transport_parameters only over QUIC")
+        if quic and self._minimum < ProtocolVersion.TLS_1_3:
+            raise ConfigurationError(f"QUIC offers TLS 1.3 only; the model offers {self._minimum.name}")
+
+    @staticmethod
+    def array(values: Iterable[int]) -> Array[c_uint16]:
+        items = tuple(values)
+        return (c_uint16 * len(items))(*items)
+
+    @staticmethod
+    def alpn_wire(protocols: Iterable[bytes]) -> bytes:
+        return b"".join(bytes((len(protocol),)) + protocol for protocol in protocols)
+
+    def _check_versions(self) -> None:
+        offered = self._hello.supported_versions
+        foreign = [version.name for version in offered if version not in self.CLIENT_VERSIONS]
+        if foreign:
+            raise ConfigurationError(f"BoringSSL clients cannot offer {', '.join(foreign)}")
+        positions = sorted(self.CLIENT_VERSIONS.index(version) for version in offered)
+        if positions != list(range(positions[0], positions[-1] + 1)):
+            raise ConfigurationError("BoringSSL offers a contiguous range of versions")
+        if offered != tuple(sorted(offered, reverse=True)):
+            raise ConfigurationError("BoringSSL offers versions from the highest to the lowest")
+
+    def _check_ciphers(self) -> None:
+        suites = self._hello.cipher_suites
+        ciphers = CipherList(suites)
+        if suites[: len(ciphers.modern)] != ciphers.modern:
+            raise ConfigurationError("BoringSSL lists the TLS 1.3 cipher suites before the others")
+        if bool(ciphers.modern) != (self._maximum >= ProtocolVersion.TLS_1_3):
+            raise ConfigurationError("TLS 1.3 cipher suites are offered exactly when TLS 1.3 is offered")
+        if bool(ciphers.legacy) != (self._minimum < ProtocolVersion.TLS_1_3):
+            raise ConfigurationError("older cipher suites are offered exactly when a version below TLS 1.3 is offered")
+
+    def _check_extensions(self) -> None:
+        hello = self._hello
+        expected = {ExtensionType.supported_groups}
+        if self._minimum < ProtocolVersion.TLS_1_3:
+            expected.update(self.LEGACY_EXTENSIONS)
+        if self._maximum >= ProtocolVersion.TLS_1_2:
+            expected.add(ExtensionType.signature_algorithms)
+        if self._maximum >= ProtocolVersion.TLS_1_3:
+            expected.update(self.MODERN_EXTENSIONS)
+        requested = set(hello.extensions)
+        if ExtensionType.session_ticket in requested and self._minimum >= ProtocolVersion.TLS_1_3:
+            raise ConfigurationError("session_ticket is sent only when a version below TLS 1.3 is offered")
+        if hello.application_settings and (not hello.application_protocols or self._maximum < ProtocolVersion.TLS_1_3):
+            raise ConfigurationError("application_settings is sent only with ALPN and TLS 1.3 offered")
+        for tls13_only in (ExtensionType.encrypted_client_hello, ExtensionType.trust_anchors):
+            if hello.offers(tls13_only) and self._maximum < ProtocolVersion.TLS_1_3:
+                raise ConfigurationError(f"{tls13_only.name} is sent only when TLS 1.3 is offered")
+        unsendable = requested - expected - self.TOGGLED_EXTENSIONS - self.FREE_EXTENSIONS - self.QUIC_EXTENSIONS
+        if unsendable:
+            reasons = (
+                self.UNSENDABLE_REASONS.get(extension, f"BoringSSL cannot send {extension.name} in a ClientHello")
+                for extension in sorted(unsendable)
+            )
+            raise ConfigurationError("; ".join(reasons))
+        missing = expected - requested
+        if missing:
+            names = ", ".join(sorted(extension.name for extension in missing))
+            raise ConfigurationError(f"BoringSSL always sends {names} with the offered versions")
+        post_quantum = [group.name for group in hello.supported_groups if group in self.POST_QUANTUM_GROUPS]
+        if post_quantum and self._maximum < ProtocolVersion.TLS_1_3:
+            raise ConfigurationError(f"BoringSSL sends {', '.join(post_quantum)} only when TLS 1.3 is offered")
+
+    def _check_trailing(self) -> None:
+        hello = self._hello
+        trailing = tuple(extension for extension in self.TRAILING_EXTENSIONS if hello.offers(extension))
+        if hello.extensions[len(hello.extensions) - len(trailing) :] != trailing:
+            raise ConfigurationError("BoringSSL sends padding and then pre_shared_key after every other extension")
+        wanted = hello.offers(ExtensionType.padding)
+        if wanted and hello.permute_extensions:
+            raise ConfigurationError("padding placement is unpredictable while extensions are permuted")
+        preceding = [extension for extension in hello.extensions if extension not in self.TRAILING_EXTENSIONS]
+        predicted = not hello.grease and bool(preceding) and preceding[-1] in self.EMPTY_BODY_EXTENSIONS
+        if predicted and not wanted and not hello.permute_extensions:
+            raise ConfigurationError(
+                f"BoringSSL pads after an empty {preceding[-1].name}; list padding last or reorder"
+            )
+        # with legacy_padding the padding comes and goes with the size of the hello, as it did on those clients
+        if wanted and not predicted and not hello.legacy_padding:
+            raise ConfigurationError(
+                "BoringSSL pads only without GREASE and after an extension with an empty body; "
+                "a client that padded to 512 bytes is modelled with legacy_padding=True"
+            )
+
+    def _check_payloads(self) -> None:
+        hello = self._hello
+        if self._minimum < ProtocolVersion.TLS_1_3 and hello.ec_point_formats != (ECPointFormat.uncompressed,):
+            raise ConfigurationError("BoringSSL sends ec_point_formats with only the uncompressed format")
+        if self._maximum >= ProtocolVersion.TLS_1_3 and hello.psk_key_exchange_modes != (
+            PskKeyExchangeMode.psk_dhe_ke,
+        ):
+            raise ConfigurationError("BoringSSL sends psk_key_exchange_modes with only psk_dhe_ke")
+
+    @staticmethod
+    def _apply(library: Library, accepted: int, what: str) -> None:
+        if accepted != 1:
+            raise ConfigurationError(f"BoringSSL rejected the {what}: {'; '.join(library.errors())}")
