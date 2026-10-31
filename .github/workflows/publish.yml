@@ -17,6 +17,7 @@ jobs:
             image: quay.io/pypa/manylinux_2_28_aarch64
             name: manylinux-aarch64
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     # glibc 2.28 is the oldest the wheel runs on; the image carries CPython 3.14 and the GCC toolset
     container: ${{ matrix.image }}
     steps:
@@ -45,13 +46,15 @@ jobs:
             tag: macosx_11_0_x86_64
             name: macos-x86_64
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.3.3
+      # Ninja sizes the build to the cores; make with --parallel and no count starts every compile at once
       - run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build --target boring_ssl2 --parallel
           cmake --install build --prefix src
           uv build --wheel
@@ -63,6 +66,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ilammy/setup-nasm@v1.5.2
@@ -83,6 +87,7 @@ jobs:
   # and an iOS app bundles the library as a framework and passes its path to Library()
   android:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1
       - run: |
@@ -101,10 +106,11 @@ jobs:
       matrix:
         sdk: [iphoneos, iphonesimulator]
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1
       - run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS \
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=${{ matrix.sdk }} -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
           cmake --build build --target boring_ssl2 --parallel
           cmake --install build --prefix ios-${{ matrix.sdk }}
