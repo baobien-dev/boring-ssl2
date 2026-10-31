@@ -5,17 +5,7 @@ on:
     tags: ["v*"]
 
 jobs:
-  sdist:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: astral-sh/setup-uv@v10.3.3
-      - run: uv build --sdist
-      - uses: actions/upload-artifact@v7.0.2
-        with:
-          name: dist-sdist
-          path: dist/
-
+  # wheels only: the package is nothing without its library, and an sdist would install anywhere and fail at import
   linux:
     strategy:
       matrix:
@@ -124,7 +114,7 @@ jobs:
           path: ios-${{ matrix.sdk }}/
 
   publish:
-    needs: [sdist, linux, macos, windows]
+    needs: [linux, macos, windows]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
