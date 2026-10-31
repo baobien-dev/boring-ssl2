@@ -291,3 +291,5 @@ cmake -S . -B build -DBORINGSSL_SOURCE_DIR=/path/to/boringssl
 ```
 
 The patches in `patches/boringssl` add `SSL_CTX_set1_extension_order` for the model's extension order and `SSL_CTX_set_legacy_padding` for the padding of older clients. They come from commits on a checkout and apply to the download in file name order; a build without them lacks those two features and nothing else.
+
+The wheels on PyPI carry the library for Linux (glibc 2.28, x86_64 and aarch64), macOS 11 (arm64 and x86_64) and Windows x64, with the licenses of BoringSSL and brotli next to it in `boring_ssl2/licenses`. On Termux, `pkg install cmake ninja clang git` and the three cmake commands above build it on the device, after which `uv pip install .` packages what was built. For an iOS app the publish workflow leaves the arm64 device and simulator builds as artifacts; the app bundles one as a framework and passes its path to `Library`.
