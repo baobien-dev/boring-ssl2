@@ -8,6 +8,3 @@ wheels/
 
 # Virtual environments
 .venv
-
-# The shared library is built by CMake, see README.md
-*.so
