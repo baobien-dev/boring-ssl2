@@ -2,6 +2,12 @@
 
 All notable changes to boring-ssl2. The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.0.2] - 2026-10-31
+
+### Changed
+
+- The Linux wheels are stripped. The library was 40 MB, 35 MB of it the debug information BoringSSL compiles in; it is 5 MB now, and the wheel 2 MB instead of 13, like the macOS and Windows ones.
+
 ## [2.0.1] - 2026-10-31
 
 ### Fixed
