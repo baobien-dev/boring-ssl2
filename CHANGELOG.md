@@ -2,6 +2,13 @@
 
 All notable changes to boring-ssl2. The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.0.1] - 2026-10-31
+
+### Fixed
+
+- The iOS builds of the publish workflow configure again: CMake makes every executable an app bundle on iOS, which BoringSSL's install rule for its `bssl` tool refused.
+- The release ships wheels only. An sdist would install on any platform and fail at import, since the package is nothing without its library.
+
 ## [2.0.0] - 2026-10-31
 
 The engine was written again from the ground up. What a program sees:

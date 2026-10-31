@@ -1,6 +1,6 @@
 [project]
 name = "boring-ssl2"
-version = "2.0.0"
+version = "2.0.1"
 description = "BoringSSL engine for ssl2: a ClientHello sent byte for byte, certificate compression, resumption, the TLS side of QUIC"
 readme = "README.md"
 license = "Apache-2.0"
